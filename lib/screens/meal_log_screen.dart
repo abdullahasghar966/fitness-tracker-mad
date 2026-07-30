@@ -39,110 +39,19 @@ class _MealLogScreenState extends State<MealLogScreen>
     super.dispose();
   }
 
-  void _showMealDialog(FitnessProvider provider, {Meal? meal}) async {
-    final nameController = TextEditingController(text: meal?.name ?? '');
-    final caloriesController =
-    TextEditingController(text: meal?.calories.toString() ?? '');
-    final proteinController =
-    TextEditingController(text: meal?.protein.toString() ?? '');
-    final carbsController =
-    TextEditingController(text: meal?.carbs.toString() ?? '');
-    final fatController =
-    TextEditingController(text: meal?.fat.toString() ?? '');
-    String category = meal?.category ?? 'Breakfast';
-
-    final result = await showDialog<Map<String, dynamic>>(
+  Future<void> _showMealDialog(FitnessProvider provider, {Meal? meal}) async {
+    final result = await showDialog<_MealResult>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: Text(meal == null ? 'Add New Meal' : 'Edit Meal'),
-          content: SingleChildScrollView(
-            child: Column(
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(labelText: 'Meal Name'),
-                ),
-                TextField(
-                  controller: caloriesController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Calories'),
-                ),
-                TextField(
-                  controller: proteinController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Protein (g)'),
-                ),
-                TextField(
-                  controller: carbsController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Carbs (g)'),
-                ),
-                TextField(
-                  controller: fatController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Fat (g)'),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: category,
-                  items: ['Breakfast', 'Lunch', 'Dinner', 'Snack']
-                      .map((c) => DropdownMenuItem(
-                    value: c,
-                    child: Text(c),
-                  ))
-                      .toList(),
-                  onChanged: (v) => category = v ?? 'Breakfast',
-                  decoration: const InputDecoration(labelText: 'Category'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            if (meal != null)
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, {"action": "delete"}),
-                child: const Text(
-                  'Delete',
-                  style: TextStyle(color: Colors.red),
-                ),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (nameController.text.isEmpty) return;
-
-                final newMeal = Meal(
-                  name: nameController.text,
-                  category: category,
-                  calories: int.tryParse(caloriesController.text) ?? 0,
-                  protein: double.tryParse(proteinController.text) ?? 0.0,
-                  carbs: double.tryParse(carbsController.text) ?? 0.0,
-                  fat: double.tryParse(fatController.text) ?? 0.0,
-                );
-
-                Navigator.pop(dialogContext, {"action": "save", "meal": newMeal});
-              },
-              child: Text(meal == null ? 'Add Meal' : 'Save Changes'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _MealDialog(meal: meal),
     );
+    if (result == null) return;
 
-    if (result != null && mounted) {
-      if (result["action"] == "delete") {
-        provider.deleteMeal(meal!);
-      } else if (result["action"] == "save") {
-        if (meal == null) {
-          provider.addMeal(result["meal"] as Meal);
-        } else {
-          provider.editMeal(meal, result["meal"] as Meal);
-        }
-      }
+    if (result.delete) {
+      provider.deleteMeal(meal!);
+    } else if (meal == null) {
+      provider.addMeal(result.meal!);
+    } else {
+      provider.editMeal(meal, result.meal!);
     }
   }
 
@@ -452,6 +361,220 @@ class _MacroTag extends StatelessWidget {
         fontWeight: FontWeight.w500,
         color: color,
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Meal dialog
+//
+// A StatefulWidget so it owns — and disposes — its controllers. Disposing
+// right after `await showDialog` would risk a "used after being disposed"
+// error while the dismissal animation still renders the fields.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MealResult {
+  final Meal? meal;
+  final bool delete;
+
+  const _MealResult({this.meal, this.delete = false});
+}
+
+class _MealDialog extends StatefulWidget {
+  final Meal? meal;
+
+  const _MealDialog({this.meal});
+
+  @override
+  State<_MealDialog> createState() => _MealDialogState();
+}
+
+class _MealDialogState extends State<_MealDialog> {
+  static const _categories = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
+
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _caloriesCtrl;
+  late final TextEditingController _proteinCtrl;
+  late final TextEditingController _carbsCtrl;
+  late final TextEditingController _fatCtrl;
+  late String _category;
+
+  String? _nameError;
+  String? _caloriesError;
+  String? _macroError;
+
+  bool get _isEdit => widget.meal != null;
+
+  /// Renders whole numbers without a trailing ".0" in the prefilled fields.
+  static String _num(double v) =>
+      v % 1 == 0 ? v.toInt().toString() : v.toString();
+
+  @override
+  void initState() {
+    super.initState();
+    final meal = widget.meal;
+    _nameCtrl = TextEditingController(text: meal?.name ?? '');
+    _caloriesCtrl =
+        TextEditingController(text: meal == null ? '' : '${meal.calories}');
+    _proteinCtrl =
+        TextEditingController(text: meal == null ? '' : _num(meal.protein));
+    _carbsCtrl =
+        TextEditingController(text: meal == null ? '' : _num(meal.carbs));
+    _fatCtrl = TextEditingController(text: meal == null ? '' : _num(meal.fat));
+    _category = meal?.category ?? 'Breakfast';
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _caloriesCtrl.dispose();
+    _proteinCtrl.dispose();
+    _carbsCtrl.dispose();
+    _fatCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Blank macro fields are treated as 0; anything non-numeric or negative
+  /// is rejected rather than silently coerced to 0.
+  double? _parseMacro(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return 0.0;
+    final value = double.tryParse(text);
+    if (value == null || value < 0) return null;
+    return value;
+  }
+
+  void _submit() {
+    final name = _nameCtrl.text.trim();
+
+    final caloriesText = _caloriesCtrl.text.trim();
+    final calories =
+        caloriesText.isEmpty ? 0 : int.tryParse(caloriesText);
+
+    final protein = _parseMacro(_proteinCtrl.text);
+    final carbs = _parseMacro(_carbsCtrl.text);
+    final fat = _parseMacro(_fatCtrl.text);
+
+    setState(() {
+      _nameError = name.isEmpty ? 'Enter a meal name' : null;
+      _caloriesError = (calories == null || calories < 0)
+          ? 'Enter calories (0 or more)'
+          : null;
+      _macroError = (protein == null || carbs == null || fat == null)
+          ? 'Macros must be numbers of 0 or more'
+          : null;
+    });
+
+    if (name.isEmpty) return;
+    if (calories == null || calories < 0) return;
+    if (protein == null || carbs == null || fat == null) return;
+
+    Navigator.pop(
+      context,
+      _MealResult(
+        meal: Meal(
+          name: name,
+          category: _category,
+          calories: calories,
+          protein: protein,
+          carbs: carbs,
+          fat: fat,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(
+        _isEdit ? 'EDIT MEAL' : 'ADD NEW MEAL',
+        style: GoogleFonts.barlowCondensed(
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary,
+          letterSpacing: 2,
+        ),
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              autofocus: !_isEdit,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.next,
+              decoration: InputDecoration(
+                labelText: 'Meal Name',
+                errorText: _nameError,
+              ),
+            ),
+            TextField(
+              controller: _caloriesCtrl,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.next,
+              decoration: InputDecoration(
+                labelText: 'Calories',
+                errorText: _caloriesError,
+              ),
+            ),
+            TextField(
+              controller: _proteinCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(labelText: 'Protein (g)'),
+            ),
+            TextField(
+              controller: _carbsCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(labelText: 'Carbs (g)'),
+            ),
+            TextField(
+              controller: _fatCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: 'Fat (g)',
+                errorText: _macroError,
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _category,
+              items: _categories
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) => setState(() => _category = v ?? 'Breakfast'),
+              decoration: const InputDecoration(labelText: 'Category'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (_isEdit)
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(context, const _MealResult(delete: true)),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          style: ElevatedButton.styleFrom(minimumSize: const Size(0, 44)),
+          child: Text(_isEdit ? 'SAVE' : 'ADD MEAL'),
+        ),
+      ],
     );
   }
 }

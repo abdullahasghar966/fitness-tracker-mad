@@ -27,112 +27,55 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return data.sublist(data.length - count);
   }
 
-  void _showBodyMeasurementDialog(FitnessProvider provider,
-      {String? key, double? value}) {
-    final nameController = TextEditingController(text: key ?? '');
-    final valueController =
-    TextEditingController(text: value?.toString() ?? '');
-
-    showDialog(
+  Future<void> _showBodyMeasurementDialog(FitnessProvider provider,
+      {String? key, double? value}) async {
+    final result = await showDialog<_MeasurementResult>(
       context: context,
-      builder: (_) {
-        return AlertDialog(
-          title: Text(key == null ? 'Add Measurement' : 'Edit Measurement'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Measurement Name'),
-              ),
-              TextField(
-                controller: valueController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Value (cm)'),
-              ),
-            ],
-          ),
-          actions: [
-            if (key != null)
-              TextButton(
-                onPressed: () {
-                  provider.deleteMeasurement(key);
-                  Navigator.pop(context);
-                },
-                child: const Text('Delete', style: TextStyle(color: Colors.red)),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final name = nameController.text.trim();
-                final val = double.tryParse(valueController.text) ?? 0.0;
-                if (name.isEmpty) return;
-
-                if (key == null) {
-                  provider.addMeasurement(name, val);
-                } else {
-                  provider.editMeasurement(key, name, val);
-                }
-                Navigator.pop(context);
-              },
-              child: Text(key == null ? 'Add' : 'Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _MeasurementDialog(initialName: key, initialValue: value),
     );
+    if (result == null) return;
+
+    if (result.delete) {
+      provider.deleteMeasurement(key!);
+    } else if (key == null) {
+      provider.addMeasurement(result.name, result.value);
+    } else {
+      provider.editMeasurement(key, result.name, result.value);
+    }
   }
 
-  void _showWeightDialog(FitnessProvider provider, {double? weight, int? index}) {
-    final controller = TextEditingController(text: weight?.toString() ?? '');
-
-    showDialog(
+  Future<void> _showWeightDialog(FitnessProvider provider,
+      {double? weight, int? index}) async {
+    final result = await showDialog<_WeightResult>(
       context: context,
-      builder: (_) {
-        return AlertDialog(
-          title: Text(weight == null ? 'Add Weight' : 'Edit Weight'),
-          content: TextField(
-            controller: controller,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Weight (kg)'),
-          ),
-          actions: [
-            if (weight != null)
-              TextButton(
-                onPressed: () {
-                  provider.deleteWeight(index!);
-                  Navigator.pop(context);
-                },
-                child: const Text('Delete', style: TextStyle(color: Colors.red)),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final w = double.tryParse(controller.text) ?? 0.0;
-                if (weight == null) {
-                  provider.addWeight(w);
-                } else {
-                  provider.editWeight(index!, w);
-                }
-                Navigator.pop(context);
-              },
-              child: Text(weight == null ? 'Add' : 'Save'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _WeightDialog(initialWeight: weight),
     );
+    if (result == null) return;
+
+    if (result.delete) {
+      provider.deleteWeight(index!);
+    } else if (weight == null) {
+      provider.addWeight(result.value);
+    } else {
+      provider.editWeight(index!, result.value);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<FitnessProvider>();
+
+    // Computed once so the trend badge and the chart below always describe
+    // the same period. (The badge used to read the full dataset while the
+    // chart showed the filtered window.)
+    final filtered = _filterWeightData(provider.weightData);
+    final hasTrend = filtered.length > 1;
+    final delta = hasTrend ? filtered.last - filtered.first : 0.0;
+    // Losing weight is the app's goal, so a drop reads as positive.
+    final isLoss = delta < 0;
+    final trendColor = delta == 0
+        ? AppColors.textMuted
+        : (isLoss ? const Color(0xFF2ECC71) : AppColors.accentRed);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -216,8 +159,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
             children: [
               Text(
                 provider.weightData.isNotEmpty
-                    ? '${provider.weightData.last} kg'
-                    : '0 kg',
+                    ? '${provider.weightData.last.toStringAsFixed(1)} kg'
+                    : '—',
                 style: GoogleFonts.barlowCondensed(
                   fontSize: 32,
                   fontWeight: FontWeight.w700,
@@ -225,31 +168,42 @@ class _ProgressScreenState extends State<ProgressScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              if (provider.weightData.length > 1)
+              if (hasTrend)
                 Container(
                   padding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF2ECC71).withValues(alpha: 0.12),
+                    color: trendColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Row(
                     children: [
                       Icon(
-                        provider.weightData.last <
-                            provider.weightData.first
-                            ? Icons.arrow_downward
-                            : Icons.arrow_upward,
+                        delta == 0
+                            ? Icons.remove
+                            : (isLoss
+                                ? Icons.arrow_downward
+                                : Icons.arrow_upward),
                         size: 12,
-                        color: const Color(0xFF2ECC71),
+                        color: trendColor,
                       ),
                       const SizedBox(width: 2),
                       Text(
-                        '${(provider.weightData.last - provider.weightData.first).toStringAsFixed(1)} kg',
+                        // Direction lives in the arrow, so show magnitude only.
+                        '${delta.abs().toStringAsFixed(1)} kg',
                         style: GoogleFonts.inter(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: const Color(0xFF2ECC71),
+                          color: trendColor,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _periods[_selectedPeriod],
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                          color: trendColor.withValues(alpha: 0.8),
                         ),
                       ),
                     ],
@@ -266,13 +220,19 @@ class _ProgressScreenState extends State<ProgressScreen> {
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: AppColors.divider, width: 1),
             ),
-            child: provider.weightData.isEmpty
-                ? const Center(child: Text('No weight data'))
-                : Builder(builder: (context) {
-                    final filtered = _filterWeightData(provider.weightData);
-                    return LineChart(
-                      LineChartData(
-                        gridData: const FlGridData(show: false),
+            child: filtered.isEmpty
+                ? Center(
+                    child: Text(
+                      'No weight data yet — tap + to add one',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: AppColors.textMuted,
+                      ),
+                    ),
+                  )
+                : LineChart(
+                    LineChartData(
+                      gridData: const FlGridData(show: false),
                         titlesData: FlTitlesData(
                           leftTitles: const AxisTitles(
                               sideTitles: SideTitles(showTitles: false)),
@@ -324,12 +284,81 @@ class _ProgressScreenState extends State<ProgressScreen> {
                         ],
                         minY: filtered.reduce((a, b) => a < b ? a : b) - 1,
                         maxY: filtered.reduce((a, b) => a > b ? a : b) + 1,
-                      ),
-                    );
-                  }),
+                    ),
+                  ),
           ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
+
+          // Recent weight entries — tap one to edit or delete it.
+          // (Without this the editWeight/deleteWeight paths were unreachable.)
+          if (filtered.isNotEmpty) ...[
+            Text(
+              'RECENT ENTRIES',
+              style: GoogleFonts.barlowCondensed(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Tap an entry to edit or delete it',
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                color: AppColors.textMuted,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: List.generate(filtered.length, (i) {
+                // Map the filtered position back to its index in the full list.
+                final realIndex =
+                    provider.weightData.length - filtered.length + i;
+                final value = filtered[i];
+                final isLatest = realIndex == provider.weightData.length - 1;
+
+                return GestureDetector(
+                  onTap: () => _showWeightDialog(
+                    provider,
+                    weight: value,
+                    index: realIndex,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isLatest
+                          ? AppColors.accent.withValues(alpha: 0.12)
+                          : AppColors.surface,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isLatest
+                            ? AppColors.accent
+                            : AppColors.divider,
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      '${value.toStringAsFixed(1)} kg',
+                      style: GoogleFonts.barlowCondensed(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: isLatest
+                            ? AppColors.accent
+                            : AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 24),
+          ] else
+            const SizedBox(height: 4),
 
           // Body Measurements
           Row(
@@ -412,7 +441,9 @@ class _ProgressScreenState extends State<ProgressScreen> {
                           text: TextSpan(
                             children: [
                               TextSpan(
-                                text: '${measurement.value}',
+                                text: measurement.value % 1 == 0
+                                    ? '${measurement.value.toInt()}'
+                                    : measurement.value.toStringAsFixed(1),
                                 style: GoogleFonts.barlowCondensed(
                                   fontSize: 22,
                                   fontWeight: FontWeight.w700,
@@ -438,6 +469,228 @@ class _ProgressScreenState extends State<ProgressScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dialogs
+//
+// Each dialog is a StatefulWidget so it owns — and disposes — its own
+// controllers. Disposing right after `await showDialog` would risk a
+// "used after being disposed" error while the dismissal animation still
+// renders the fields.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MeasurementResult {
+  final String name;
+  final double value;
+  final bool delete;
+
+  const _MeasurementResult(this.name, this.value, {this.delete = false});
+}
+
+class _WeightResult {
+  final double value;
+  final bool delete;
+
+  const _WeightResult(this.value, {this.delete = false});
+}
+
+class _MeasurementDialog extends StatefulWidget {
+  final String? initialName;
+  final double? initialValue;
+
+  const _MeasurementDialog({this.initialName, this.initialValue});
+
+  @override
+  State<_MeasurementDialog> createState() => _MeasurementDialogState();
+}
+
+class _MeasurementDialogState extends State<_MeasurementDialog> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _valueCtrl;
+  String? _nameError;
+  String? _valueError;
+
+  bool get _isEdit => widget.initialName != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.initialName ?? '');
+    _valueCtrl = TextEditingController(
+      text: widget.initialValue?.toString() ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _valueCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _nameCtrl.text.trim();
+    final value = double.tryParse(_valueCtrl.text.trim());
+
+    setState(() {
+      _nameError = name.isEmpty ? 'Enter a measurement name' : null;
+      _valueError = (value == null || value <= 0)
+          ? 'Enter a value greater than 0'
+          : null;
+    });
+
+    if (name.isEmpty || value == null || value <= 0) return;
+    Navigator.pop(context, _MeasurementResult(name, value));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(
+        _isEdit ? 'EDIT MEASUREMENT' : 'ADD MEASUREMENT',
+        style: GoogleFonts.barlowCondensed(
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary,
+          letterSpacing: 2,
+        ),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameCtrl,
+            autofocus: !_isEdit,
+            textCapitalization: TextCapitalization.words,
+            textInputAction: TextInputAction.next,
+            decoration: InputDecoration(
+              labelText: 'Measurement Name',
+              errorText: _nameError,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _valueCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _submit(),
+            decoration: InputDecoration(
+              labelText: 'Value (cm)',
+              errorText: _valueError,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        if (_isEdit)
+          TextButton(
+            onPressed: () => Navigator.pop(
+              context,
+              const _MeasurementResult('', 0, delete: true),
+            ),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          style: ElevatedButton.styleFrom(minimumSize: const Size(0, 44)),
+          child: Text(_isEdit ? 'SAVE' : 'ADD'),
+        ),
+      ],
+    );
+  }
+}
+
+class _WeightDialog extends StatefulWidget {
+  final double? initialWeight;
+
+  const _WeightDialog({this.initialWeight});
+
+  @override
+  State<_WeightDialog> createState() => _WeightDialogState();
+}
+
+class _WeightDialogState extends State<_WeightDialog> {
+  late final TextEditingController _ctrl;
+  String? _error;
+
+  bool get _isEdit => widget.initialWeight != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(
+      text: widget.initialWeight?.toString() ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final value = double.tryParse(_ctrl.text.trim());
+    setState(() {
+      _error = (value == null || value <= 0)
+          ? 'Enter a weight greater than 0'
+          : null;
+    });
+    if (value == null || value <= 0) return;
+    Navigator.pop(context, _WeightResult(value));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(
+        _isEdit ? 'EDIT WEIGHT' : 'ADD WEIGHT',
+        style: GoogleFonts.barlowCondensed(
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary,
+          letterSpacing: 2,
+        ),
+      ),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _submit(),
+        decoration: InputDecoration(
+          labelText: 'Weight (kg)',
+          errorText: _error,
+        ),
+      ),
+      actions: [
+        if (_isEdit)
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(context, const _WeightResult(0, delete: true)),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          style: ElevatedButton.styleFrom(minimumSize: const Size(0, 44)),
+          child: Text(_isEdit ? 'SAVE' : 'ADD'),
+        ),
+      ],
     );
   }
 }
