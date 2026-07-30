@@ -62,50 +62,96 @@ class FitnessProvider extends ChangeNotifier {
     ),
   ];
 
+  bool _validExercise(int index) =>
+      index >= 0 && index < todayExercises.length;
+
   void toggleExercise(int index) {
+    if (!_validExercise(index)) return;
     todayExercises[index].isExpanded = !todayExercises[index].isExpanded;
     notifyListeners();
   }
 
   void toggleSet(int exerciseIndex, int setIndex) {
-    var set = todayExercises[exerciseIndex].sets[setIndex];
-    todayExercises[exerciseIndex].sets[setIndex] =
-        set.copyWith(isCompleted: !set.isCompleted);
+    if (!_validExercise(exerciseIndex)) return;
+    final sets = todayExercises[exerciseIndex].sets;
+    if (setIndex < 0 || setIndex >= sets.length) return;
+    sets[setIndex] = sets[setIndex].copyWith(
+      isCompleted: !sets[setIndex].isCompleted,
+    );
     notifyListeners();
   }
 
-  void addExercise(String name) {
+  void addExercise(
+    String name, {
+    String category = 'General',
+    String bodyPart = 'Full Body',
+    String equipment = 'None',
+  }) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
     todayExercises.add(
       Exercise(
-        name: name,
-        category: "General",
-        bodyPart: "Full Body",
-        equipment: "None",
+        name: trimmed,
+        category: category,
+        bodyPart: bodyPart,
+        equipment: equipment,
         sets: [],
       ),
     );
     notifyListeners();
   }
 
+  void deleteExercise(int index) {
+    if (!_validExercise(index)) return;
+    todayExercises.removeAt(index);
+    notifyListeners();
+  }
+
   void addSet(int exerciseIndex, int reps, double weight) {
-    var exercise = todayExercises[exerciseIndex];
-    int setNumber = exercise.sets.length + 1;
+    if (!_validExercise(exerciseIndex)) return;
+    if (reps <= 0 || weight < 0) return;
+    final exercise = todayExercises[exerciseIndex];
     exercise.sets.add(
-      ExerciseSet(setNumber: setNumber, reps: reps, weight: weight),
+      ExerciseSet(
+        setNumber: exercise.sets.length + 1,
+        reps: reps,
+        weight: weight,
+      ),
     );
     notifyListeners();
   }
 
+  /// Removes a set and renumbers the remaining ones so [ExerciseSet.setNumber]
+  /// always stays 1..n with no gaps.
+  void deleteSet(int exerciseIndex, int setIndex) {
+    if (!_validExercise(exerciseIndex)) return;
+    final sets = todayExercises[exerciseIndex].sets;
+    if (setIndex < 0 || setIndex >= sets.length) return;
+    sets.removeAt(setIndex);
+    _renumber(sets);
+    notifyListeners();
+  }
+
   void updateExerciseSets(Exercise exercise, List<ExerciseSet> newSets) {
-    int index = todayExercises.indexOf(exercise);
+    final index = todayExercises.indexOf(exercise);
     if (index != -1) {
-      todayExercises[index].sets = List.from(newSets);
+      final copy = List<ExerciseSet>.from(newSets);
+      _renumber(copy);
+      todayExercises[index].sets = copy;
       notifyListeners();
     }
   }
 
+  void _renumber(List<ExerciseSet> sets) {
+    for (var i = 0; i < sets.length; i++) {
+      sets[i] = sets[i].copyWith(setNumber: i + 1);
+    }
+  }
+
+  /// Jumps to the Workout tab so the START WORKOUT button actually does
+  /// something instead of silently no-oping.
   void startWorkout() {
-    // Workout started
+    setIndex(1);
   }
 
   // -------------------------
@@ -137,6 +183,7 @@ class FitnessProvider extends ChangeNotifier {
       meals.where((m) => m.category == 'Snack').toList();
 
   void addMeal(Meal meal) {
+    if (meal.name.trim().isEmpty) return;
     meals.add(meal);
     notifyListeners();
   }
@@ -160,8 +207,6 @@ class FitnessProvider extends ChangeNotifier {
   List<double> weightData = [
     82.5, 82.1, 81.8, 81.6, 81.2, 80.9, 80.7, 80.4, 80.1, 79.9, 79.7, 79.5,
   ];
-
-  List<double> weeklyWorkouts = [3, 4, 3, 5, 4, 3, 4];
 
   // -------------------------
   // Goals
@@ -225,30 +270,32 @@ class FitnessProvider extends ChangeNotifier {
   }
 
   void addGoal(String title, double current, double target, String unit) {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty || target <= 0 || current < 0) return;
     goals.add(Goal(
-      title: title,
+      title: trimmed,
       subtitle: 'Custom goal',
       current: current,
       target: target,
-      unit: unit,
+      unit: unit.trim(),
       icon: Icons.flag_outlined,
     ));
     notifyListeners();
   }
 
   void updateGoal(int index, double current, double target) {
-    if (index >= 0 && index < goals.length) {
-      var goal = goals[index];
-      goals[index] = Goal(
-        title: goal.title,
-        subtitle: goal.subtitle,
-        current: current,
-        target: target,
-        unit: goal.unit,
-        icon: goal.icon,
-      );
-      notifyListeners();
-    }
+    if (index < 0 || index >= goals.length) return;
+    if (target <= 0 || current < 0) return;
+    final goal = goals[index];
+    goals[index] = Goal(
+      title: goal.title,
+      subtitle: goal.subtitle,
+      current: current,
+      target: target,
+      unit: goal.unit,
+      icon: goal.icon,
+    );
+    notifyListeners();
   }
 
   void deleteGoal(int index) {
@@ -259,15 +306,19 @@ class FitnessProvider extends ChangeNotifier {
   }
 
   void addMeasurement(String name, double value) {
-    bodyMeasurements[name] = value;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || value <= 0) return;
+    bodyMeasurements[trimmed] = value;
     notifyListeners();
   }
 
   void editMeasurement(String oldName, String newName, double newValue) {
-    if (oldName != newName) {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty || newValue <= 0) return;
+    if (oldName != trimmed) {
       bodyMeasurements.remove(oldName);
     }
-    bodyMeasurements[newName] = newValue;
+    bodyMeasurements[trimmed] = newValue;
     notifyListeners();
   }
 
@@ -277,12 +328,13 @@ class FitnessProvider extends ChangeNotifier {
   }
 
   void addWeight(double weight) {
+    if (weight <= 0) return;
     weightData.add(weight);
     notifyListeners();
   }
 
   void editWeight(int index, double weight) {
-    if (index >= 0 && index < weightData.length) {
+    if (index >= 0 && index < weightData.length && weight > 0) {
       weightData[index] = weight;
       notifyListeners();
     }
