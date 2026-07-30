@@ -155,9 +155,13 @@ lib/
     stat_card.dart                   # AnimatedContainer 300ms, accentLeft pattern
     macro_progress_bar.dart          # Animated macro progress bars (MacroProgressBar)
     goal_card.dart                   # Goal card with left accent strip
-    reveal_on_scroll.dart            # Legacy reveal widget — prefer VolumeScrollList
-    staggered_list.dart              # Legacy stagger widget — prefer VolumeScrollList
+test/
+  fitness_provider_test.dart         # Unit tests for all provider state & CRUD
+  widget_test.dart                   # Smoke tests: boot, tab switching, goal add
 ```
+
+> `reveal_on_scroll.dart` and `staggered_list.dart` were deleted — they were
+> superseded by `VolumeScrollList` and had no remaining references.
 
 ---
 
@@ -168,7 +172,14 @@ lib/
 | `provider`     | ChangeNotifierProvider / Consumer / context.watch                   |
 | `google_fonts` | Barlow Condensed, Inter, Barlow typefaces                           |
 | `fl_chart`     | LineChart (weight trend) in ProgressScreen                          |
-| `sensors_plus` | Step counter stub — real sensor calls mocked with static data       |
+
+> `sensors_plus` was removed — it was declared but never imported, and step
+> data is static mock data in `FitnessProvider`.
+>
+> ⚠️ `google_fonts` downloads typefaces at runtime. With no network on first
+> launch the app silently falls back to the system font. To make the design
+> offline-proof, bundle the .ttf files under `assets/fonts/` and declare them
+> in `pubspec.yaml`.
 
 ---
 
@@ -180,6 +191,18 @@ lib/
 - Never use `FormField.value` (deprecated) — use `initialValue`.
 - Remove deprecated `background`/`onBackground` from `ColorScheme.dark()` — use `surface`/`onSurface`.
 - `DropdownButtonFormField` uses `initialValue:` not `value:` (deprecated after v3.33.0).
+- **Dialogs own their controllers.** Build each dialog/sheet body as its own
+  `StatefulWidget` that disposes its `TextEditingController`s in `dispose()`.
+  Disposing right after `await showDialog(...)` can throw "used after being
+  disposed", because the future completes while the dismissal animation is
+  still rendering the fields.
+- **Never call `pumpAndSettle()` in widget tests.** `MealLogScreen` runs a
+  looping FAB pulse and every screen is alive inside the `IndexedStack`, so an
+  animation is always in flight and `pumpAndSettle` times out. Pump explicit
+  durations instead.
+- Divide-by-zero guards: `Goal.progress` returns 0 when `target <= 0`, because
+  `NaN` survives `.clamp()` and then trips assertions inside the progress
+  widgets. Clamp any `widthFactor` / `LinearProgressIndicator.value`.
 
 ---
 ---
@@ -270,10 +293,10 @@ class ExerciseSet {
                required this.weight, this.isCompleted = false});
 
   // Immutable update pattern — always use copyWith, never mutate directly
-  ExerciseSet copyWith({bool? isCompleted}) => ExerciseSet(
-    setNumber: setNumber, reps: reps, weight: weight,
-    isCompleted: isCompleted ?? this.isCompleted,
-  );
+  ExerciseSet copyWith({int? setNumber, int? reps, double? weight, bool? isCompleted});
+
+  String get formattedWeight;  // 80.0 -> "80", 82.5 -> "82.5"
+  String get weightLabel;      // "80 kg", or "BW" when weight == 0
 }
 
 class Exercise {
@@ -284,8 +307,14 @@ class Exercise {
   List<ExerciseSet> sets;
   bool isExpanded;         // UI expansion state — toggled by FitnessProvider.toggleExercise()
 
+  // sets is COPIED into a growable list. The old `sets = const []` default
+  // produced an unmodifiable list that threw on the first addSet.
+  Exercise({..., List<ExerciseSet>? sets, this.isExpanded = false})
+      : sets = List<ExerciseSet>.from(sets ?? const []);
+
   int get totalSets => sets.length;
   int get completedSets => sets.where((s) => s.isCompleted).length;
+  int get totalReps => sets.fold(0, (sum, s) => sum + s.reps);
 }
 
 class Meal {
@@ -334,12 +363,18 @@ class FitnessProvider extends ChangeNotifier {
   // ── Exercises ──────────────────────────────────────────────────
   List<Exercise> todayExercises = [ /* Bench Press, Pull-Up */ ];
 
+  // Every index-taking method bounds-checks and no-ops instead of throwing.
   void toggleExercise(int index) { ... notifyListeners(); }
   void toggleSet(int exerciseIndex, int setIndex) { ... notifyListeners(); }
-  void addExercise(String name) { ... notifyListeners(); }
-  void addSet(int exerciseIndex, int reps, double weight) { ... notifyListeners(); }
-  void updateExerciseSets(Exercise exercise, List<ExerciseSet> newSets) { ... notifyListeners(); }
-  void startWorkout() { /* hook for future implementation */ }
+  void addExercise(String name, {String category = 'General',
+                   String bodyPart = 'Full Body', String equipment = 'None'}) { ... }
+  void deleteExercise(int index) { ... notifyListeners(); }
+  void addSet(int exerciseIndex, int reps, double weight) { ... }   // rejects reps <= 0
+  void deleteSet(int exerciseIndex, int setIndex) { ... }           // renumbers survivors
+  void updateExerciseSets(Exercise exercise, List<ExerciseSet> newSets) { ... }
+  void startWorkout() { setIndex(1); }   // jumps to the Workout tab
+
+  // _renumber() keeps ExerciseSet.setNumber a gapless 1..n after any removal.
 
   // ── Meals ──────────────────────────────────────────────────────
   List<Meal> meals = [ /* Oatmeal with Berries */ ];
@@ -488,153 +523,75 @@ StatCard(
 | `lib/screens/workout_log_screen.dart` | Expandable exercise list, add exercise/set dialogs |
 | `lib/screens/workout_detail_screen.dart` | Full exercise detail with set logging, Hero target |
 | `lib/widgets/volume_scroll_list.dart` | Primary scroll system (reveal + volume effects) |
-| `lib/widgets/reveal_on_scroll.dart` | Legacy reveal widget (superseded by VolumeScrollList) |
-| `lib/widgets/staggered_list.dart` | Legacy stagger widget (superseded by VolumeScrollList) |
 
 ---
 
 ### `lib/screens/workout_log_screen.dart` — Structure
 
+Fully themed with the design system (`AppColors` / `GoogleFonts` /
+`VolumeScrollList`) and the entry point into the detail screen.
+
 ```dart
-class WorkoutLogScreen extends StatelessWidget {
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = Provider.of<FitnessProvider>(context);
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Workout Log')),
-      body: ListView(
-        children: [
-          // ── Daily stats summary card ──────────────────────────────
-          Card(
-            child: Row(children: [
-              _statWidget("Steps",    provider.steps.toDouble(),          provider.stepsGoal.toDouble()),
-              _statWidget("Calories", provider.caloriesBurned.toDouble(), provider.caloriesGoal.toDouble()),
-              _statWidget("Workouts", provider.workoutsThisWeek.toDouble(), 7.0),
-              _statWidget("Water",    provider.waterIntake, 2.5, isDouble: true),
-            ]),
-          ),
-
-          // ── Exercises ListView.builder ─────────────────────────────
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: provider.todayExercises.length,
-            itemBuilder: (context, index) {
-              final exercise = provider.todayExercises[index];
-              return Card(
-                child: ExpansionTile(
-                  key: Key('${exercise.name}_$index'),
-                  initiallyExpanded: exercise.isExpanded,
-                  onExpansionChanged: (_) => provider.toggleExercise(index),
-                  title: Text(exercise.name),
-                  subtitle: Text('${exercise.category} • ${exercise.bodyPart} • ${exercise.equipment}'),
-                  children: [
-                    // Sets mapped to ListTile with Checkbox
-                    ...exercise.sets.map((set) {
-                      int setIndex = exercise.sets.indexOf(set);
-                      return ListTile(
-                        leading: Checkbox(
-                          value: set.isCompleted,
-                          onChanged: (_) => provider.toggleSet(index, setIndex),
-                        ),
-                        title: Text("Set ${set.setNumber}"),
-                        subtitle: Text("${set.reps} reps • ${set.weight} kg"),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete),
-                          onPressed: () {
-                            // Must use Future.delayed to avoid modifying list during build
-                            Future.delayed(Duration.zero, () {
-                              exercise.sets.removeAt(setIndex);
-                              provider.updateExerciseSets(exercise, exercise.sets);
-                            });
-                          },
-                        ),
-                      );
-                    }),
-                    // Add Set button
-                    ElevatedButton.icon(
-                      onPressed: () => _showAddSetDialog(context, provider, index),
-                      icon: const Icon(Icons.add),
-                      label: const Text("Add Set"),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddExerciseDialog(context, provider),
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
-
-  // ── Stat row helper ─────────────────────────────────────────────
-  Widget _statWidget(String title, double current, double goal, {bool isDouble = false}) {
-    final progress = (current / goal).clamp(0.0, 1.0);
-    return Expanded(child: Column(children: [
-      Text(title),
-      Text(isDouble
-          ? "${current.toStringAsFixed(1)} / $goal"
-          : "${current.toInt()} / ${goal.toInt()}"),
-      LinearProgressIndicator(value: progress, color: Colors.greenAccent),
-    ]));
-  }
-
-  // ── Add Exercise Dialog ─────────────────────────────────────────
-  void _showAddExerciseDialog(BuildContext context, FitnessProvider provider) async {
-    final controller = TextEditingController();
-    final result = await showDialog<String>(context: context, builder: (dialogContext) =>
-      AlertDialog(
-        title: const Text("Add New Exercise"),
-        content: TextField(controller: controller, decoration: const InputDecoration(hintText: "Exercise Name")),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("Cancel")),
-          ElevatedButton(
-            onPressed: () {
-              if (controller.text.isNotEmpty) Navigator.pop(dialogContext, controller.text.trim());
-            },
-            child: const Text("Add"),
-          ),
-        ],
-      ),
-    );
-    if (result != null && context.mounted) provider.addExercise(result);
-  }
-
-  // ── Add Set Dialog ──────────────────────────────────────────────
-  void _showAddSetDialog(BuildContext context, FitnessProvider provider, int exerciseIndex) async {
-    final repsController   = TextEditingController();
-    final weightController = TextEditingController();
-    final result = await showDialog<Map<String, dynamic>>(context: context, builder: (dialogContext) =>
-      AlertDialog(
-        title: const Text("Add Set"),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: repsController,   keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: "Reps")),
-          TextField(controller: weightController, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: "Weight (kg)")),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("Cancel")),
-          ElevatedButton(
-            onPressed: () {
-              final reps   = int.tryParse(repsController.text.trim()) ?? 0;
-              final weight = double.tryParse(weightController.text.trim()) ?? 0.0;
-              if (reps > 0) Navigator.pop(dialogContext, {'reps': reps, 'weight': weight});
-            },
-            child: const Text("Add"),
-          ),
-        ],
-      ),
-    );
-    if (result != null && context.mounted)
-      provider.addSet(exerciseIndex, result['reps'] as int, result['weight'] as double);
-  }
-}
+WorkoutLogScreen (StatelessWidget)
+└── Scaffold — AppBar 'WORKOUT LOG' + accent FAB (add exercise)
+    └── VolumeScrollList
+        ├── _DailyStatsCard   — steps / calories / workouts / water, each a
+        │                       _MiniStat with a clamped LinearProgressIndicator.
+        │                       Goals come from the provider (workoutsGoal),
+        │                       never hardcoded.
+        ├── Section header 'TODAY'S EXERCISES' + count badge
+        └── _ExerciseCard × n  — or _EmptyExercises when the list is empty
 ```
+
+**`_ExerciseCard`** — outer `Container` (border + radius) wrapping a
+`Material` (surface colour + `clipBehavior: Clip.antiAlias`) so the header's
+`InkWell` ripple paints *on top of* the card instead of behind it.
+
+```dart
+Column
+├── InkWell(onTap: provider.toggleExercise(index))
+│   └── Row: Hero(name) + meta line | 'done/total' badge
+│            | IconButton(open_in_new) → detail screen
+│            | AnimatedRotation(chevron)
+└── AnimatedCrossFade(250ms) → _SetList when exercise.isExpanded
+```
+
+**Hero tag:** `'exercise_${index}_${exercise.name}'` — row-unique, so two
+exercises sharing a name can't trip the "multiple heroes share the same tag"
+assertion. The same tag is passed to `WorkoutDetailScreen(heroTag: ...)`.
+
+**Navigation into the detail screen:**
+
+```dart
+Navigator.push(
+  context,
+  MainNavigator.slideRoute(
+    WorkoutDetailScreen(exercise: exercise, heroTag: heroTag),
+  ),
+);
+```
+
+**`_SetList`** — one row per set: `Checkbox` (→ `provider.toggleSet`), set
+number, `reps • weightLabel`, and a delete `IconButton` (→
+`provider.deleteSet`, which renumbers the remaining sets). Below it: ADD SET
+and a red delete-exercise button.
+
+> The old implementation removed a set with
+> `Future.delayed(Duration.zero, () { exercise.sets.removeAt(i); ... })` to
+> dodge "modified during build". That hack is gone — `provider.deleteSet()`
+> owns the mutation and renumbering.
+
+**Dialogs** — `_AddExerciseDialog` and `_AddSetDialog` are `StatefulWidget`s
+that own and dispose their controllers, validate input, and surface errors
+through `InputDecoration.errorText` instead of silently doing nothing:
+
+| Field  | Rule                                                        |
+|--------|-------------------------------------------------------------|
+| Name   | required, trimmed                                           |
+| Reps   | must parse and be > 0                                       |
+| Weight | optional (blank = bodyweight/0), must parse and be >= 0     |
+
+Adding or deleting an exercise confirms with a `SnackBar` via `_toast()`.
 
 ---
 
@@ -643,7 +600,13 @@ class WorkoutLogScreen extends StatelessWidget {
 ```dart
 class WorkoutDetailScreen extends StatefulWidget {
   final Exercise exercise;   // passed from WorkoutLogScreen via Hero + slideRoute
-  const WorkoutDetailScreen({super.key, required this.exercise});
+  final String? heroTag;     // row-unique tag; falls back to exercise.name
+
+  const WorkoutDetailScreen({
+    super.key,
+    required this.exercise,
+    this.heroTag,
+  });
 }
 
 class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
@@ -652,21 +615,29 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _sets = List.from(widget.exercise.sets);  // work on local copy, sync to provider on changes
+    _sets = List.from(widget.exercise.sets);  // work on local copy
+  }
+
+  // ── _sync() — the ONLY way this screen writes back ──────────────
+  // Pushes local edits into the provider, then mirrors the canonical
+  // (renumbered) list back so the two can never drift apart.
+  void _sync() {
+    context.read<FitnessProvider>().updateExerciseSets(widget.exercise, _sets);
+    setState(() => _sets = List.from(widget.exercise.sets));
   }
 
   // ── Set row structure ───────────────────────────────────────────
-  // Each set row shows: setNumber | reps | weight | LOG/DONE button
+  // Each set row shows: setNumber | reps | weightLabel | LOG/DONE button
   // Toggling LOG/DONE:
-  //   setState(() { _sets[index] = ExerciseSet(..., isCompleted: !set.isCompleted); });
-  //   context.read<FitnessProvider>().updateExerciseSets(widget.exercise, _sets);
+  //   _sets[index] = set.copyWith(isCompleted: !set.isCompleted);
+  //   _sync();
 
   // ── Add Set button ──────────────────────────────────────────────
   // Appends a new ExerciseSet using last set's reps/weight as defaults:
-  //   setState(() { _sets.add(ExerciseSet(setNumber: _sets.length + 1,
+  //   _sets.add(ExerciseSet(setNumber: _sets.length + 1,
   //       reps: _sets.isNotEmpty ? _sets.last.reps : 10,
-  //       weight: _sets.isNotEmpty ? _sets.last.weight : 0)); });
-  //   context.read<FitnessProvider>().updateExerciseSets(widget.exercise, _sets);
+  //       weight: _sets.isNotEmpty ? _sets.last.weight : 0));
+  //   _sync();
 
   // ── Chip helper ─────────────────────────────────────────────────
   // _buildChip(label, color) → Container with color.withValues(alpha: 0.12) background
@@ -730,40 +701,6 @@ VolumeListItem(
 ```
 
 ---
-
-### `lib/widgets/reveal_on_scroll.dart` — Legacy
-
-```dart
-// Simpler one-shot reveal animation (no volume/scroll effect).
-// DEPRECATED — use VolumeScrollList / VolumeListItem instead.
-// Still present for backwards compatibility.
-//
-// Usage (old):
-RevealOnScroll(index: i, child: myWidget)
-// Delay = (index * 70).clamp(0, 420) ms
-// FadeTransition + SlideTransition (Offset(0, 0.28) → Offset.zero), 420ms easeOutCubic
-```
-
----
-
-### `lib/widgets/staggered_list.dart` — Legacy
-
-```dart
-// Staggered Column animation — all children animate in sequence.
-// DEPRECATED — use VolumeScrollList / VolumeListItem instead.
-//
-// Single AnimationController spans the total duration of all items.
-// Each item gets an Interval-based fade + translate animation.
-// Triggered via WidgetsBinding.instance.addPostFrameCallback.
-//
-// Usage (old):
-StaggeredList(
-  staggerDelay: const Duration(milliseconds: 70),
-  itemDuration: const Duration(milliseconds: 600),
-  children: [ widget1, widget2, ... ],
-)
-```
-
 ---
 ---
 
