@@ -8,7 +8,16 @@ import '../theme/app_theme.dart';
 class WorkoutDetailScreen extends StatefulWidget {
   final Exercise exercise;
 
-  const WorkoutDetailScreen({super.key, required this.exercise});
+  /// Must match the Hero tag on the originating list row. Defaults to the
+  /// exercise name, but callers should pass a row-unique tag so two exercises
+  /// with the same name can't collide.
+  final String? heroTag;
+
+  const WorkoutDetailScreen({
+    super.key,
+    required this.exercise,
+    this.heroTag,
+  });
 
   @override
   State<WorkoutDetailScreen> createState() => _WorkoutDetailScreenState();
@@ -21,6 +30,15 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
   void initState() {
     super.initState();
     _sets = List.from(widget.exercise.sets);
+  }
+
+  /// Pushes local edits into the provider, then mirrors the canonical
+  /// (renumbered) list back so the two never drift apart.
+  void _sync() {
+    context.read<FitnessProvider>().updateExerciseSets(widget.exercise, _sets);
+    setState(() {
+      _sets = List.from(widget.exercise.sets);
+    });
   }
 
   Color _getCategoryColor(String category) {
@@ -149,7 +167,7 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Hero(
-                          tag: exercise.name,
+                          tag: widget.heroTag ?? exercise.name,
                           child: Material(
                             color: Colors.transparent,
                             child: Text(
@@ -266,6 +284,19 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                     ),
                   ),
 
+                  // Empty state
+                  if (_sets.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Text(
+                        'No sets yet — tap ADD SET below',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ),
+
                   // Table rows
                   ...List.generate(_sets.length, (index) {
                     final set = _sets[index];
@@ -311,9 +342,7 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                           ),
                           Expanded(
                             child: Text(
-                              set.weight > 0
-                                  ? '${set.weight} kg'
-                                  : 'BW',
+                              set.weightLabel,
                               style: GoogleFonts.barlowCondensed(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w600,
@@ -327,15 +356,10 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
                             child: Center(
                               child: GestureDetector(
                                 onTap: () {
-                                  setState(() {
-                                    _sets[index] = ExerciseSet(
-                                      setNumber: set.setNumber,
-                                      reps: set.reps,
-                                      weight: set.weight,
-                                      isCompleted: !set.isCompleted,
-                                    );
-                                  });
-                                  context.read<FitnessProvider>().updateExerciseSets(widget.exercise, _sets);
+                                  _sets[index] = set.copyWith(
+                                    isCompleted: !set.isCompleted,
+                                  );
+                                  _sync();
                                 },
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
@@ -414,14 +438,12 @@ class _WorkoutDetailScreenState extends State<WorkoutDetailScreen> {
               height: 52,
               child: OutlinedButton(
                 onPressed: () {
-                  setState(() {
-                    _sets.add(ExerciseSet(
-                      setNumber: _sets.length + 1,
-                      reps: _sets.isNotEmpty ? _sets.last.reps : 10,
-                      weight: _sets.isNotEmpty ? _sets.last.weight : 0,
-                    ));
-                  });
-                  context.read<FitnessProvider>().updateExerciseSets(widget.exercise, _sets);
+                  _sets.add(ExerciseSet(
+                    setNumber: _sets.length + 1,
+                    reps: _sets.isNotEmpty ? _sets.last.reps : 10,
+                    weight: _sets.isNotEmpty ? _sets.last.weight : 0,
+                  ));
+                  _sync();
                 },
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: AppColors.accent, width: 1),

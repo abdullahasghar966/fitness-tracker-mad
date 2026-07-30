@@ -65,10 +65,7 @@ class MainNavigator extends StatefulWidget {
   }
 }
 
-class _MainNavigatorState extends State<MainNavigator>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _pageController;
-
+class _MainNavigatorState extends State<MainNavigator> {
   final List<Widget> _screens = const [
     DashboardScreen(),
     WorkoutLogScreen(),
@@ -76,22 +73,6 @@ class _MainNavigatorState extends State<MainNavigator>
     ProgressScreen(),
     GoalsScreen(),
   ];
-
-  @override
-  void initState() {
-    super.initState();
-    _pageController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-    _pageController.forward();
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
-  }
 
   void _onTabTap(int index, FitnessProvider provider) {
     if (provider.selectedIndex != index) {
