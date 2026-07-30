@@ -19,7 +19,10 @@ class GoalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final percent = (goal.progress * 100).toStringAsFixed(0);
+    // Trust the caller's value, but keep it in range — it drives both the
+    // badge and the bar so the two can never disagree.
+    final safeProgress = progress.clamp(0.0, 1.0);
+    final percent = (safeProgress * 100).toStringAsFixed(0);
 
     // FIX: Flutter throws "A borderRadius can only be given for uniform borders"
     // when mixing border widths (left: 4px, others: 1px) with borderRadius.
@@ -106,7 +109,7 @@ class GoalCard extends StatelessWidget {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(3),
                         child: LinearProgressIndicator(
-                          value: goal.progress,
+                          value: safeProgress,
                           minHeight: 6,
                           backgroundColor: AppColors.divider,
                           valueColor:
